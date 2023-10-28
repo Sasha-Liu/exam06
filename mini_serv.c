@@ -12,12 +12,24 @@
 # include <unistd.h>
 # include <sys/select.h>
 # include <strings.h>
+# include <string.h>
+# include <stdlib.h>
+# include <stdio.h>
+
+
+# define false 0
+# define true 1
+# define bool int
+
+typedef struct s_client	t_client;
+typedef struct s_server	t_server;
+
+void	goodbye_client(t_server *server, int client_fd);
 
 /*
 	store all clients in a linked list
 	new client is always add at the end
 */
-typedef struct s_client	t_client;
 
 typedef struct s_client 
 {
@@ -30,8 +42,8 @@ typedef struct s_client
 }	t_client;
 
 typedef struct s_server {
-	int 		sock;		
-	t_client	*lst;		
+	int 		sock;
+	t_client	*lst;
 	int			num;
 	fd_set		all_fd;
 }	t_server;
@@ -41,15 +53,15 @@ bool	add_client(t_client **lst, int fd, int id)
 	t_client	*new_client;
 	t_client	*last;
 
-	new_client = malloc(sizeof t_client);
+	new_client = malloc(sizeof(t_client));
 	if (!new_client)
 	{
-		return (false)
+		return (false);
 	}
 	new_client->fd = fd;
 	new_client->id = id;
-	new_client->message = NULL;
-	new_client->read = NULL;
+	new_client->read_buffer = NULL;
+	new_client->send_buffer = NULL;
 	new_client->prev = NULL;
 	new_client->next = NULL;
 	if (*lst == NULL)
@@ -84,16 +96,16 @@ void	rm_client(t_client **lst, int fd)
 			next = curr->next;
 	}
 	if (prev)
-		prev.next = next;
+		prev->next = next;
 	if (next)
-		next.prev = prev;	
+		next->prev = prev;	
 	if (curr == *lst)
 		*lst = (*lst)->next;
 	if (curr == NULL)
 		return ;
-	close(curr->fd)
-	free(curr->message);
-	free(curr->read);
+	close(curr->fd);
+	free(curr->read_buffer);
+	free(curr->send_buffer);
 	free(curr);
 }
 
@@ -111,8 +123,8 @@ void	free_lst(t_client **lst)
 	{
 		next = node->next;
 		close(node->fd);
-		free(node->message);
-		free(node->read);
+		free(node->read_buffer);
+		free(node->send_buffer);
 		free(node);
 		node = next;
 	}
@@ -123,7 +135,7 @@ void	free_quit(t_server *server, char *message)
 {
 	if (server)
 	{
-		free_lst(server->lst);
+		free_lst(&(server->lst));
 		close(server->sock);
 	}
 	write(2, message, strlen(message));
@@ -207,46 +219,32 @@ char *str_join(char *buf, char *add)
 	return (newbuf);
 }
 
-int	getPort(int argc, char **argv)
-{
-	if (argc != 2)
-	{
-		write(2, "Wrong number of arguments\n", 26);
-		exit(1);
-	}
-	return (atoi(argv[1]));
-}
-
 int	create_server(uint16_t port)
 {
 	int					sock;
 	struct sockaddr_in	name;
 
-	sock = socket(AF_INET, SOCK_STREAM, 0)
-	if (socket < 0)
+	sock = socket(AF_INET, SOCK_STREAM, 0);
+	if (sock < 0)
 	{
-		free_quit(NULL, "Fatal error\n");
+		free_quit(NULL, "Fatal error");
 	}
 	name.sin_family = AF_INET;
 	name.sin_port = htons(port);
 	name.sin_addr.s_addr = htonl(INADDR_ANY);
 	if (bind(sock, (struct sockaddr *) &name, sizeof (name)) < 0)
 	{
-		free_quit(NULL, "Fatal error\n");
-	}
-	if (listen(sock, 10) < 0)
-	{
-		free_quit(NULL, "Fatal error\n");
+		free_quit(NULL, "Fatal error");
 	}
 	return (sock);
 }
 
 // 'client %d: '
-// To all the OTHER client
+// Check if client quit as well
 void	client_says(t_server *server, int client_fd)
 {
 	t_client	*lst = server->lst;
-	t_client	*client = get_client(server->lst, client_fd)
+	t_client	*client = get_client(server->lst, client_fd);
 	int			result;
 	char		temp[11];
 	char		header[30];
@@ -255,11 +253,14 @@ void	client_says(t_server *server, int client_fd)
 	char		*mess = NULL;
 	char		*line = NULL;
 
+	printf("client_says\n");
 	// read the message from client_fd into buffer, the join with client->read_buffer
-	while (true)
+	for (int i = 0; true; i++)
 	{
 		bzero(temp, 11);
 		result = read(client_fd, temp, 10);
+		if (result == 0 && i == 0)
+			return (goodbye_client(server, client_fd));
 		if (result <= 0)
 			break ;
 		buffer = str_join(buffer, temp);
@@ -269,10 +270,10 @@ void	client_says(t_server *server, int client_fd)
 	sprintf(header, "client %d: ", client->id);
 	while (true)
 	{
-		num = extract_message(&(client->read_buffer), &line);
-		if (num == -1)
+		result = extract_message(&(client->read_buffer), &line);
+		if (result == -1)
 			free_quit(server, "malloc fails");
-		if (num == 0)
+		if (result == 0)
 			break ;
 		str_join(mess, header);
 		str_join(mess, line);
@@ -280,10 +281,10 @@ void	client_says(t_server *server, int client_fd)
 	// send message to others 
 	while (lst)
 	{
-		if (lst->id == client_id)
+		if (lst->id == client->id)
 			continue ;
-		lst->message = str_join(lst->message, mess);
-		if (lst->message == NULL)
+		lst->send_buffer = str_join(lst->send_buffer, mess);
+		if (lst->send_buffer == NULL)
 			free_quit(server, "malloc fails\n");
 		lst = lst->next;
 	}
@@ -298,7 +299,8 @@ void	hello_client(t_server *server)
 	t_client			*lst = server->lst;
 	char 				buffer[40];
 
-	client_fd = accept(server->sock, (struct sockaddr *) &clientname, &size);
+	printf("hello client\n");
+	client_fd = accept(server->sock, (struct sockaddr *) &clientname, (unsigned int *) (&size));
 	if (client_fd < 0)
 	{
 		free_quit(server, "accept fails\n");
@@ -308,9 +310,9 @@ void	hello_client(t_server *server)
 	sprintf(buffer, "server: client %d just arrived\n", server->num - 1);
 	while (lst)
 	{
-		lst->message = str_join(lst->message, buffer);
-		if (lst->message == NULL)
-			free_quit(server, "malloc fails\n");
+		lst->send_buffer = str_join(lst->send_buffer, buffer);
+		if (lst->send_buffer == NULL)
+			free_quit(server, "Fatal error");
 		lst = lst->next;
 	}
 }
@@ -319,19 +321,35 @@ void	goodbye_client(t_server *server, int client_fd)
 {
 	t_client	*lst = server->lst;
 	char 		buffer[40];
-	int			client_id = get_client_id(server->lst, client_fd);
+	t_client	*client = get_client(server->lst, client_fd);
 
-	sprintf(buffer, "server: client %d just left\n", client_id);
+	printf("goodbye client\n");
+	sprintf(buffer, "server: client %d just left\n", client->id);
 	rm_client(&(server->lst), client_fd);
-	FD_CLR(client_fd, server->all_fd);
+	FD_CLR(client_fd, &(server->all_fd));
 	while (lst)
 	{
-		lst->message = str_join(lst->message, buffer);
-		if (lst->message == NULL)
-			free_quit(server, "malloc fails\n");
+		lst->send_buffer = str_join(lst->send_buffer, buffer);
+		if (lst->send_buffer == NULL)
+			free_quit(server, "Fatal error");
 		lst = lst->next;
 	}
 }
+
+/*
+	send everything in the send_buffer to client
+*/
+void write_to_client(t_server *server, int client_fd)
+{
+	t_client	*client = get_client(server->lst, client_fd);
+
+	if (client->send_buffer == NULL)
+		return ;
+	write(client_fd, client->send_buffer, strlen(client->send_buffer));
+	free(client->send_buffer);
+	client->send_buffer = NULL;
+}
+
 
 void	server_run(int sock)
 {
@@ -347,35 +365,40 @@ void	server_run(int sock)
 	FD_ZERO (&(server.all_fd));
 	FD_ZERO (&read_fd);
 	FD_ZERO (&write_fd);
-	FD_SET (sock, &all_fd);
+	FD_SET (sock, &(server.all_fd));
 
+	if (listen(sock, 10) < 0)
+	{
+		free_quit(NULL, "Fatal error\n");
+	}
 	while (true)
 	{
-		read_fd = all_fd;
-		write_fd = all_fd;
-		if (select(FD_SETSIZE, read_fd, write_fd, NULL, NULL) < 0)
+		read_fd = server.all_fd;
+		write_fd = server.all_fd;
+		if (select(FD_SETSIZE, &read_fd, &write_fd, NULL, NULL) < 0)
 		{
-			free_quit("select fails")
+			free_quit(&server, "select fails");
 		}
-		for (i = 0; i < FD_SETSIZE; i++)
+		for (int i = 0; i < FD_SETSIZE; i++)
 		{
 			// can read
 			if (FD_ISSET (i, &read_fd))
 			{
-				if (i == sock) //new client
+				if (i == sock)
 				{
-					// new client
-					add_client(&lst, )
+					printf("new client\n");
+					// hello_client(&server);
 				}
 				else
 				{
-					// check end of file
+					printf("client says sth\n");
+					// client_says(&server, i);
 				}
 			}
 			// can write
 			if (FD_ISSET (i, &write_fd))
 			{
-
+				// write_to_client(&server, i);
 			}
 		}
 	}
@@ -384,6 +407,13 @@ void	server_run(int sock)
 
 int	main(int argc, char **argv)
 {
-	int	port = getPort(argc, argv);
+	if (argc != 2)
+	{
+		write(2, "Wrong number of arguments\n", 26);
+		exit(1);
+	}
+	int	port = atoi(argv[1]);
 	int	sock = create_server((uint16_t) port);
+	server_run(sock);
 }
+

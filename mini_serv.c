@@ -16,7 +16,6 @@
 # include <stdlib.h>
 # include <stdio.h>
 
-
 # define false 0
 # define true 1
 # define bool int
@@ -246,62 +245,51 @@ void	client_says(t_server *server, int client_fd)
 	t_client	*lst = server->lst;
 	t_client	*client = get_client(server->lst, client_fd);
 	int			result;
-	char		temp[11];
-	char		header[30];
-	char		*buffer = NULL;
+	char		temp[31];
 
 	char		*mess = NULL;
 	char		*line = NULL;
 
-	printf("client %d says\n", client->id);
-	// read the message from client_fd into buffer, the join with client->read_buffer
+	// read the message from client_fd into read_buffer
 	for (int i = 0; true; i++)
 	{
-		printf("loop: %d\n", i);
-		bzero(temp, 11);
-		result = read(client_fd, temp, 10); //read block
+		bzero(temp, 31);
+		result = read(client_fd, temp, 30); //read block
 		if (result <= 0 && i == 0)
 		{
-			printf("goodbye\n");
 			return (goodbye_client(server, client_fd));
 		}
-		buffer = str_join(buffer, temp);
-		if (result < 10)
+		client->read_buffer = str_join(client->read_buffer, temp);
+		if (result < 30)
 		{
-			printf("break\n");
 			break ;
 		}
 	}
-	client->read_buffer = str_join(client->read_buffer, buffer);
 	// extract message from 'read_buffer' into 'mess', formatted
-	sprintf(header, "client %d: ", client->id);
+	sprintf(temp, "client %d: ", client->id);
 	while (true)
 	{
-		printf("loop2\n");
 		result = extract_message(&(client->read_buffer), &line);
 		if (result == -1)
-			free_quit(server, "malloc fails");
+			free_quit(server, "Fatal error");
 		if (result == 0)
 			break ;
-		mess = str_join(mess, header);
+		mess = str_join(mess, temp);
 		mess = str_join(mess, line);
-		printf("loop2 end\n");
 	}
 	// send message to others 
 	if (mess == NULL)
 		return ;
 	while (lst)
 	{
-		printf("loop3\n");
 		if (lst->id == client->id)
 		{
 			lst = lst->next;
 			continue ;
 		}
-		printf("mess: %s\n", mess);
 		lst->send_buffer = str_join(lst->send_buffer, mess);
 		if (lst->send_buffer == NULL)
-			free_quit(server, "malloc fails\n");
+			free_quit(server, "Fatal error");
 		lst = lst->next;
 	}
 }
@@ -315,7 +303,6 @@ void	hello_client(t_server *server)
 	t_client			*lst;
 	char 				buffer[40];
 
-	printf("hello client\n");
 	client_fd = accept(server->sock, (struct sockaddr *) &clientname, (unsigned int *) (&size));
 	if (client_fd < 0)
 	{
@@ -340,7 +327,6 @@ void	goodbye_client(t_server *server, int client_fd)
 	char 		buffer[40];
 	t_client	*client = get_client(server->lst, client_fd);
 
-	printf("goodbye client\n");
 	sprintf(buffer, "server: client %d just left\n", client->id);
 	rm_client(&(server->lst), client_fd);
 	FD_CLR(client_fd, &(server->all_fd));
@@ -387,7 +373,7 @@ void	server_run(int sock)
 
 	if (listen(sock, 10) < 0)
 	{
-		free_quit(NULL, "Fatal error\n");
+		free_quit(NULL, "Fatal error");
 	}
 	while (true)
 	{

@@ -204,7 +204,7 @@ char *str_join(char *buf, char *add)
 	char	*newbuf;
 	int		len;
 
-	if (buf == 0)
+	if (buf == NULL)
 		len = 0;
 	else
 		len = strlen(buf);
@@ -253,36 +253,52 @@ void	client_says(t_server *server, int client_fd)
 	char		*mess = NULL;
 	char		*line = NULL;
 
-	printf("client_says\n");
+	printf("client %d says\n", client->id);
 	// read the message from client_fd into buffer, the join with client->read_buffer
 	for (int i = 0; true; i++)
 	{
+		printf("loop: %d\n", i);
 		bzero(temp, 11);
-		result = read(client_fd, temp, 10);
-		if (result == 0 && i == 0)
+		result = read(client_fd, temp, 10); //read block
+		if (result <= 0 && i == 0)
+		{
+			printf("goodbye\n");
 			return (goodbye_client(server, client_fd));
-		if (result <= 0)
-			break ;
+		}
 		buffer = str_join(buffer, temp);
+		if (result < 10)
+		{
+			printf("break\n");
+			break ;
+		}
 	}
 	client->read_buffer = str_join(client->read_buffer, buffer);
 	// extract message from 'read_buffer' into 'mess', formatted
 	sprintf(header, "client %d: ", client->id);
 	while (true)
 	{
+		printf("loop2\n");
 		result = extract_message(&(client->read_buffer), &line);
 		if (result == -1)
 			free_quit(server, "malloc fails");
 		if (result == 0)
 			break ;
-		str_join(mess, header);
-		str_join(mess, line);
+		mess = str_join(mess, header);
+		mess = str_join(mess, line);
+		printf("loop2 end\n");
 	}
 	// send message to others 
+	if (mess == NULL)
+		return ;
 	while (lst)
 	{
+		printf("loop3\n");
 		if (lst->id == client->id)
+		{
+			lst = lst->next;
 			continue ;
+		}
+		printf("mess: %s\n", mess);
 		lst->send_buffer = str_join(lst->send_buffer, mess);
 		if (lst->send_buffer == NULL)
 			free_quit(server, "malloc fails\n");
@@ -296,7 +312,7 @@ void	hello_client(t_server *server)
 	int					client_fd;
 	struct sockaddr_in	clientname;
 	size_t				size = sizeof (clientname);
-	t_client			*lst = server->lst;
+	t_client			*lst;
 	char 				buffer[40];
 
 	printf("hello client\n");
@@ -308,6 +324,7 @@ void	hello_client(t_server *server)
 	add_client(&(server->lst), client_fd, (server->num)++);
 	FD_SET (client_fd, &(server->all_fd));
 	sprintf(buffer, "server: client %d just arrived\n", server->num - 1);
+	lst = server->lst;
 	while (lst)
 	{
 		lst->send_buffer = str_join(lst->send_buffer, buffer);
@@ -319,7 +336,7 @@ void	hello_client(t_server *server)
 
 void	goodbye_client(t_server *server, int client_fd)
 {
-	t_client	*lst = server->lst;
+	t_client	*lst;
 	char 		buffer[40];
 	t_client	*client = get_client(server->lst, client_fd);
 
@@ -327,6 +344,7 @@ void	goodbye_client(t_server *server, int client_fd)
 	sprintf(buffer, "server: client %d just left\n", client->id);
 	rm_client(&(server->lst), client_fd);
 	FD_CLR(client_fd, &(server->all_fd));
+	lst = server->lst;
 	while (lst)
 	{
 		lst->send_buffer = str_join(lst->send_buffer, buffer);
@@ -343,7 +361,7 @@ void write_to_client(t_server *server, int client_fd)
 {
 	t_client	*client = get_client(server->lst, client_fd);
 
-	if (client->send_buffer == NULL)
+	if (client == NULL || client->send_buffer == NULL)
 		return ;
 	write(client_fd, client->send_buffer, strlen(client->send_buffer));
 	free(client->send_buffer);
@@ -381,24 +399,22 @@ void	server_run(int sock)
 		}
 		for (int i = 0; i < FD_SETSIZE; i++)
 		{
+			// can write
+			if (FD_ISSET (i, &write_fd))
+			{
+				write_to_client(&server, i);
+			}
 			// can read
 			if (FD_ISSET (i, &read_fd))
 			{
 				if (i == sock)
 				{
-					printf("new client\n");
-					// hello_client(&server);
+					hello_client(&server);
 				}
 				else
 				{
-					printf("client says sth\n");
-					// client_says(&server, i);
+					client_says(&server, i);
 				}
-			}
-			// can write
-			if (FD_ISSET (i, &write_fd))
-			{
-				// write_to_client(&server, i);
 			}
 		}
 	}

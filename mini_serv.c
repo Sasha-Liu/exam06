@@ -94,14 +94,14 @@ void	rm_client(t_client **lst, int fd)
 		if (curr)
 			next = curr->next;
 	}
+	if (curr == NULL)
+		return ;
 	if (prev)
 		prev->next = next;
 	if (next)
-		next->prev = prev;	
+		next->prev = prev;
 	if (curr == *lst)
 		*lst = (*lst)->next;
-	if (curr == NULL)
-		return ;
 	close(curr->fd);
 	free(curr->read_buffer);
 	free(curr->send_buffer);
@@ -134,11 +134,14 @@ void	free_quit(t_server *server, char *message)
 {
 	if (server)
 	{
-		free_lst(&(server->lst));
 		close(server->sock);
+		free_lst(&(server->lst));
 	}
-	write(2, message, strlen(message));
-	write(2, "\n", 1);
+	if (message)
+	{
+		write(2, message, strlen(message));
+		write(2, "\n", 1);
+	}
 	exit(1);
 }
 
@@ -195,6 +198,8 @@ int extract_message(char **buf, char **msg)
 /*
 	Given by subject
 
+	usage: buf = str_join(buf, add)
+
 	return NULL => malloc fails
 	return newbuf = buf + add
 */
@@ -228,11 +233,13 @@ int	create_server(uint16_t port)
 	{
 		free_quit(NULL, "Fatal error");
 	}
+	bzero(&name, sizeof(name));
 	name.sin_family = AF_INET;
 	name.sin_port = htons(port);
 	name.sin_addr.s_addr = htonl(INADDR_ANY);
 	if (bind(sock, (struct sockaddr *) &name, sizeof (name)) < 0)
 	{
+		close(sock);
 		free_quit(NULL, "Fatal error");
 	}
 	return (sock);
@@ -254,7 +261,7 @@ void	client_says(t_server *server, int client_fd)
 	for (int i = 0; true; i++)
 	{
 		bzero(temp, 31);
-		result = read(client_fd, temp, 30); //read block
+		result = read(client_fd, temp, 30);
 		if (result <= 0 && i == 0)
 		{
 			return (goodbye_client(server, client_fd));
@@ -271,11 +278,16 @@ void	client_says(t_server *server, int client_fd)
 	{
 		result = extract_message(&(client->read_buffer), &line);
 		if (result == -1)
+		{
+			free(mess); 
+			free(line);
 			free_quit(server, "Fatal error");
+		}
 		if (result == 0)
 			break ;
 		mess = str_join(mess, temp);
 		mess = str_join(mess, line);
+		free(line);
 	}
 	// send message to others 
 	if (mess == NULL)
@@ -289,9 +301,13 @@ void	client_says(t_server *server, int client_fd)
 		}
 		lst->send_buffer = str_join(lst->send_buffer, mess);
 		if (lst->send_buffer == NULL)
+		{
+			free(mess);
 			free_quit(server, "Fatal error");
+		}
 		lst = lst->next;
 	}
+	free(mess);
 }
 
 // Accept new client, add to list, welcome message
@@ -306,11 +322,12 @@ void	hello_client(t_server *server)
 	client_fd = accept(server->sock, (struct sockaddr *) &clientname, (unsigned int *) (&size));
 	if (client_fd < 0)
 	{
-		free_quit(server, "accept fails\n");
+		free_quit(server, "accept fails");
 	}
-	add_client(&(server->lst), client_fd, (server->num)++);
+	add_client(&(server->lst), client_fd, server->num);
 	FD_SET (client_fd, &(server->all_fd));
-	sprintf(buffer, "server: client %d just arrived\n", server->num - 1);
+	sprintf(buffer, "server: client %d just arrived\n", server->num);
+	server->num++ ;
 	lst = server->lst;
 	while (lst)
 	{
@@ -353,7 +370,6 @@ void write_to_client(t_server *server, int client_fd)
 	free(client->send_buffer);
 	client->send_buffer = NULL;
 }
-
 
 void	server_run(int sock)
 {
